@@ -13,6 +13,7 @@
   "scripts": {
     "build": "tsc --build",
     "watch": "tsc --build --watch",
+    "test": "echo \"No tests yet\" && exit 0",
     "synth": "cdk synth --context stage=workload",
     "cdk": "cdk"
   },
