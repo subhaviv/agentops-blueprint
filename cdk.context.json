@@ -1,0 +1,21 @@
+{
+  "agenticai/defaultRegion": "us-east-1",
+  "agenticai/workloadAccountId": "FILL_IN_YOUR_WORKLOAD_ACCOUNT_ID",
+  "agenticai/vpcCidr": "10.0.0.0/16",
+  "agenticai/availabilityZones": ["us-east-1a", "us-east-1b"],
+  "agenticai/tenantId": "FILL_IN_YOUR_TENANT_ID",
+  "agenticai/agentId": "primary",
+  "agenticai/costCentre": "FILL_IN_YOUR_COST_CENTRE",
+  "agenticai/envName": "nonprod",
+  "agenticai/deployWorkloadApp": true,
+
+  "agenticai/inferenceM2mSecretArn": "FILL_IN_FROM_PLATFORM_TEAM",
+  "agenticai/inferenceGatewayUrl":   "FILL_IN_FROM_PLATFORM_TEAM",
+  "agenticai/inferenceModelId":      "FILL_IN_FROM_PLATFORM_TEAM",
+
+  "_comment_optional": "Fill in the keys below only if the platform team provided them.",
+  "agenticai/externalUserPoolId":       "",
+  "agenticai/externalUserPoolClientId": "",
+  "agenticai/externalUserPoolRegion":   "us-east-1",
+  "agenticai/notificationEmail":        ""
+}

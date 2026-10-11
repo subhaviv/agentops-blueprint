@@ -1,0 +1,33 @@
+# GitLab CI — uploads the workload source zip to the platform S3 bucket on
+# every merge to main. CodePipeline triggers automatically off the new S3
+# object version; no network path from AWS back to GitLab is needed.
+#
+# Prerequisites (set in GitLab CI/CD → Variables):
+#   AWS_ROLE_ARN          — IAM role in the platform account the runner assumes
+#                           (platform team grants s3:PutObject on the source bucket)
+#   PIPELINE_SOURCE_BUCKET — agenticai-pipeline-source-<your-tenant>
+#   PIPELINE_SOURCE_KEY    — workload-source.zip  (must match S3WorkloadPipelineStack sourceObjectKey)
+
+stages:
+  - upload
+
+upload-source:
+  stage: upload
+  image: amazon/aws-cli:latest
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  script:
+    - |
+      # Assume the CI runner role (OIDC or long-lived key — configure per your org policy)
+      zip -r /tmp/workload-source.zip . \
+        --exclude ".git/*" \
+        --exclude "node_modules/*" \
+        --exclude "cdk.out/*" \
+        --exclude "dist/*"
+
+      aws s3 cp /tmp/workload-source.zip \
+        "s3://${PIPELINE_SOURCE_BUCKET}/${PIPELINE_SOURCE_KEY}" \
+        --region us-east-1
+
+      echo "Uploaded to s3://${PIPELINE_SOURCE_BUCKET}/${PIPELINE_SOURCE_KEY}"
+      echo "CodePipeline will trigger automatically off the new S3 object version."
