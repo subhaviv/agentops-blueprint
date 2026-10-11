@@ -8,13 +8,6 @@ import { WorkloadAppStack } from "../apps/workload-account/lib/workload-app-stac
 
 const app = new App();
 
-const stage = app.node.tryGetContext("stage");
-if (stage !== "workload") {
-  throw new Error(
-    `This repo only supports stage=workload. Got: '${stage ?? "(none)"}'. Pass --context stage=workload.`,
-  );
-}
-
 function str(key: string): string | undefined {
   const v = app.node.tryGetContext(key);
   return typeof v === "string" ? v : undefined;
@@ -27,9 +20,19 @@ function strArr(key: string): string[] {
   try { return JSON.parse(raw); } catch { return []; }
 }
 
-const workloadAccount = str("agenticai/workloadAccountId");
+const stage = app.node.tryGetContext("stage");
+const pipelineSelection = str("agenticai/pipelineSelection");
+if (stage !== "workload" && !(stage === "pipeline" && pipelineSelection === "workload")) {
+  throw new Error(
+    `This repo only supports stage=workload or stage=pipeline with agenticai/pipelineSelection=workload. Got stage='${stage ?? "(none)"}'.`,
+  );
+}
+
+const workloadAccount = str("agenticai/workloadAccountId") ?? str("agenticai/workloadNonprodAccountId");
 const region = str("agenticai/defaultRegion") ?? process.env.CDK_DEFAULT_REGION ?? "us-east-1";
-const availabilityZones = strArr("agenticai/availabilityZones");
+const availabilityZones = strArr("agenticai/availabilityZones").length >= 2
+  ? strArr("agenticai/availabilityZones")
+  : strArr("agenticai/workloadNonprodAvailabilityZones");
 
 if (!workloadAccount) throw new Error("Missing context: agenticai/workloadAccountId");
 if (availabilityZones.length < 2) throw new Error("Missing context: agenticai/availabilityZones (need ≥2)");
