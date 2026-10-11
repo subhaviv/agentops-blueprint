@@ -26,6 +26,8 @@
 #   --user-pool-client   CLIENT_ID
 #   --notification-email ops@example.com
 #   --gitlab-project-id  12345              (if set, writes CI variables via glab CLI)
+#   --ci-runner-user-arn arn:aws:iam::172873868821:user/gitlab-ci
+#                                          (IAM user the CI runner uses to assume the role)
 #   --dry-run                               (print what would change, no file writes)
 #
 set -euo pipefail
@@ -49,6 +51,7 @@ USER_POOL_ID=""
 USER_POOL_CLIENT=""
 NOTIFICATION_EMAIL=""
 GITLAB_PROJECT_ID=""
+CI_RUNNER_USER_ARN=""
 DRY_RUN=false
 
 # ── Arg parse ─────────────────────────────────────────────────────────────────
@@ -67,8 +70,9 @@ while [[ $# -gt 0 ]]; do
     --user-pool-id)      USER_POOL_ID="$2";      shift 2 ;;
     --user-pool-client)  USER_POOL_CLIENT="$2";  shift 2 ;;
     --notification-email) NOTIFICATION_EMAIL="$2"; shift 2 ;;
-    --gitlab-project-id) GITLAB_PROJECT_ID="$2"; shift 2 ;;
-    --dry-run)           DRY_RUN=true;           shift ;;
+    --gitlab-project-id)   GITLAB_PROJECT_ID="$2";   shift 2 ;;
+    --ci-runner-user-arn)  CI_RUNNER_USER_ARN="$2";  shift 2 ;;
+    --dry-run)             DRY_RUN=true;              shift ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
 done
@@ -191,6 +195,48 @@ JSON
 
 echo "cdk.context.json written."
 
+# ── Create CI runner IAM role ─────────────────────────────────────────────────
+CI_RUNNER_ROLE_ARN=""
+CI_RUNNER_USER_ARN="${CI_RUNNER_USER_ARN:-arn:aws:iam::REPLACE_ME:user/REPLACE_ME}"
+
+ROLE_NAME="agenticai-ci-runner-${TENANT}"
+PLATFORM_SOURCE_BUCKET_ARN="arn:aws:s3:::agenticai-pipeline-source-${TENANT}"
+
+echo "Creating CI runner IAM role '${ROLE_NAME}' in workload account..."
+CI_RUNNER_ROLE_ARN=$(aws iam create-role \
+  --role-name "$ROLE_NAME" \
+  --assume-role-policy-document "{
+    \"Version\": \"2012-10-17\",
+    \"Statement\": [{
+      \"Effect\": \"Allow\",
+      \"Principal\": { \"AWS\": \"${CI_RUNNER_USER_ARN}\" },
+      \"Action\": \"sts:AssumeRole\"
+    }]
+  }" \
+  --description "CI runner role for ${TENANT} LOB — allows S3 upload to platform pipeline source bucket" \
+  --query 'Role.Arn' --output text 2>&1) || {
+    echo "Warning: could not create IAM role (may already exist). Fetching existing ARN..." >&2
+    CI_RUNNER_ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text 2>/dev/null || echo "")
+  }
+
+if [[ -n "$CI_RUNNER_ROLE_ARN" && "$CI_RUNNER_ROLE_ARN" != *"REPLACE_ME"* ]]; then
+  aws iam put-role-policy \
+    --role-name "$ROLE_NAME" \
+    --policy-name "PipelineSourceUpload" \
+    --policy-document "{
+      \"Version\": \"2012-10-17\",
+      \"Statement\": [{
+        \"Effect\": \"Allow\",
+        \"Action\": [\"s3:PutObject\", \"s3:GetBucketVersioning\"],
+        \"Resource\": [\"${PLATFORM_SOURCE_BUCKET_ARN}\", \"${PLATFORM_SOURCE_BUCKET_ARN}/*\"]
+      }]
+    }"
+  echo "  CI runner role ready: ${CI_RUNNER_ROLE_ARN}"
+else
+  echo "  Skipped — replace CI_RUNNER_USER_ARN placeholder and re-run, or create the role manually."
+  CI_RUNNER_ROLE_ARN="<create role manually — trust your CI IAM user, allow s3:PutObject on ${PLATFORM_SOURCE_BUCKET_ARN}>"
+fi
+
 # ── GitLab CI variables ───────────────────────────────────────────────────────
 if [[ -n "$GITLAB_PROJECT_ID" ]]; then
   if command -v glab &>/dev/null; then
@@ -205,10 +251,10 @@ if [[ -n "$GITLAB_PROJECT_ID" ]]; then
   fi
 else
   echo ""
-  echo "Set these GitLab CI variables (Settings → CI/CD → Variables):"
+  echo "Set these CI/CD variables:"
   echo "  PIPELINE_SOURCE_BUCKET = ${BUCKET_NAME}"
   echo "  PIPELINE_SOURCE_KEY    = workload-source.zip"
-  echo "  AWS_ROLE_ARN           = <IAM role ARN from platform team>"
+  echo "  AWS_ROLE_ARN           = ${CI_RUNNER_ROLE_ARN}"
 fi
 
 # ── Commit ────────────────────────────────────────────────────────────────────
