@@ -1,11 +1,11 @@
 {
-  "name": "enterprise-agentic-ai-platform-blueprint",
+  "name": "agentops-blueprint",
   "version": "1.0.0",
-  "description": "Multi-account CDK blueprint for enterprise agentic AI on Amazon Bedrock AgentCore.",
+  "description": "LOB workload blueprint for enterprise agentic AI on Amazon Bedrock AgentCore.",
   "private": true,
   "license": "MIT-0",
   "bin": {
-    "agentic-ai-platform": "bin/agentic-ai-platform.ts"
+    "workload-app": "bin/workload-app.ts"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -13,26 +13,12 @@
   "scripts": {
     "build": "tsc --build",
     "watch": "tsc --build --watch",
-    "test": "jest",
-    "test:conformance": "jest --testPathPatterns=tests/conformance",
-    "test:unit": "jest --testPathPatterns=packages",
-    "synth": "cdk synth --strict --context stage=management",
-    "cdk": "cdk",
-    "lint": "eslint . --ext .ts,.tsx",
-    "format": "prettier --write \"**/*.{ts,tsx,json,md,yml,yaml}\"",
-    "scrub": "bash scripts/scrub-security-leakage.sh"
+    "synth": "cdk synth --context stage=workload",
+    "cdk": "cdk"
   },
   "devDependencies": {
-    "@types/jest": "^30.0.0",
     "@types/node": "^20.14.10",
-    "@typescript-eslint/eslint-plugin": "^8.71.1",
-    "@typescript-eslint/parser": "^8.71.1",
     "aws-cdk": "^2.150.0",
-    "eslint": "^8.57.0",
-    "eslint-config-prettier": "^9.1.0",
-    "jest": "^30.5.2",
-    "prettier": "^3.3.3",
-    "ts-jest": "^29.4.14",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.3"
   },
@@ -40,10 +26,6 @@
     "aws-cdk-lib": "^2.150.0",
     "cdk-nag": "^2.28.186",
     "constructs": "^10.3.0",
-    "source-map-support": "^0.5.21",
-    "tsconfig-paths": "^4.2.0"
-  },
-  "overrides": {
-    "argparse": "^2.0.1"
+    "source-map-support": "^0.5.21"
   }
 }
