@@ -34,8 +34,7 @@ export class WorkloadNetworkStack extends Stack {
 
     this.vpc = new ec2.Vpc(this, 'Vpc', {
       ipAddresses: ec2.IpAddresses.cidr(cidr),
-      maxAzs: azs?.length ?? 2,
-      availabilityZones: azs,
+      ...(azs ? { availabilityZones: azs } : { maxAzs: 2 }),
       natGateways: 0,
       subnetConfiguration: [
         {
@@ -111,6 +110,8 @@ export class WorkloadNetworkStack extends Stack {
     NagSuppressions.addStackSuppressions(this, [
       { id: 'AwsSolutions-L1',    reason: 'CDK-managed custom-resource Lambda runtime.' },
       { id: 'AwsSolutions-IAM4',  reason: 'AWSLambdaBasicExecutionRole on CDK custom-resource role.', appliesTo: ['Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'] },
+      { id: 'AwsSolutions-EC23',  reason: 'Ingress restricted to VPC CIDR on port 443 only; VPCE SG by design.' },
+      { id: 'CdkNagValidationFailure', reason: 'VPC CIDR resolves to intrinsic at synth time; rule cannot be statically validated.' },
       { id: 'NIST.800.53.R5-LambdaConcurrency', reason: 'Provisioning-time only.' },
       { id: 'NIST.800.53.R5-LambdaDLQ',         reason: 'CloudFormation surfaces failures.' },
       { id: 'NIST.800.53.R5-LambdaInsideVPC',    reason: 'Control-plane calls to AWS-managed endpoints.' },
