@@ -85,6 +85,7 @@ function addStacks(scope: Construct, cfg: EnvConfig): void {
       inferenceGatewayUrl:      str("agenticai/inferenceGatewayUrl"),
       inferenceModelId:         str("agenticai/inferenceModelId"),
       notificationEmail:        str("agenticai/notificationEmail"),
+      auditOamSinkArn:          str("agenticai/auditOamSinkArn"),
     });
     appStack.addDependency(networkStack);
   }

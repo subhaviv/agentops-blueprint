@@ -16,6 +16,8 @@ import {
   aws_apigatewayv2_authorizers as apigwv2auth,
   aws_ecr as ecr,
   aws_bedrock as bedrock,
+  aws_oam as oam,
+  aws_cloudwatch as cw,
   custom_resources as cr,
   CustomResource,
 } from 'aws-cdk-lib';
@@ -45,6 +47,14 @@ export interface WorkloadAppStackProps extends StackProps {
   readonly inferenceModelId?: string;
 
   readonly notificationEmail?: string;
+
+  /**
+   * Audit-account CloudWatch OAM sink ARN. When set, this stack creates an OAM
+   * source Link sharing this account's Metrics + Logs + Traces (incl. the AgentCore
+   * runtime log group and X-Ray) up to the central sink for cross-account
+   * observability. Inlined as a plain CfnLink — this repo has no @agenticai packages.
+   */
+  readonly auditOamSinkArn?: string;
 }
 
 export class WorkloadAppStack extends Stack {
@@ -126,10 +136,14 @@ export class WorkloadAppStack extends Stack {
       });
       runtimeCrRole.addToPolicy(new iam.PolicyStatement({
         actions: [
-          'bedrock:CreateAgentRuntime',
-          'bedrock:UpdateAgentRuntime',
-          'bedrock:DeleteAgentRuntime',
-          'bedrock:GetAgentRuntime',
+          'bedrock-agentcore:CreateAgentRuntime',
+          'bedrock-agentcore:UpdateAgentRuntime',
+          'bedrock-agentcore:DeleteAgentRuntime',
+          'bedrock-agentcore:GetAgentRuntime',
+          'bedrock-agentcore:CreateAgentRuntimeEndpoint',
+          'bedrock-agentcore:UpdateAgentRuntimeEndpoint',
+          'bedrock-agentcore:DeleteAgentRuntimeEndpoint',
+          'bedrock-agentcore:GetAgentRuntimeEndpoint',
           'iam:PassRole',
         ],
         resources: ['*'],
@@ -142,9 +156,9 @@ export class WorkloadAppStack extends Stack {
           role: runtimeCrRole,
           timeout: Duration.minutes(5),
           code: require('aws-cdk-lib/aws-lambda').Code.fromInline(`
-const { BedrockClient, CreateAgentRuntimeCommand, DeleteAgentRuntimeCommand } = require('@aws-sdk/client-bedrock');
+const { BedrockAgentCoreControlClient, CreateAgentRuntimeCommand, DeleteAgentRuntimeCommand } = require('@aws-sdk/client-bedrock-agentcore-control');
 exports.handler = async (event) => {
-  const client = new BedrockClient({});
+  const client = new BedrockAgentCoreControlClient({});
   if (event.RequestType === 'Delete') {
     if (event.PhysicalResourceId && event.PhysicalResourceId !== 'PENDING') {
       await client.send(new DeleteAgentRuntimeCommand({ agentRuntimeId: event.PhysicalResourceId }));
@@ -206,6 +220,85 @@ exports.handler = async (event) => {
     ], true);
 
     new CfnOutput(this, 'ApiEndpoint', { value: this.api.apiEndpoint });
+
+    // ── Observability: cross-account CloudWatch OAM source link ───────────────
+    // When the platform hands us the audit-account sink ARN, share this account's
+    // Metrics + Logs (incl. the AgentCore runtime log group) + X-Ray Traces to the
+    // central sink. Inlined CfnLink (no @agenticai/observability in a cloned repo).
+    if (props.auditOamSinkArn) {
+      new oam.CfnLink(this, 'OamSourceLink', {
+        labelTemplate: `${prefix}-$AccountName`,
+        resourceTypes: [
+          'AWS::CloudWatch::Metric',
+          'AWS::Logs::LogGroup',
+          'AWS::XRay::Trace',
+        ],
+        sinkIdentifier: props.auditOamSinkArn,
+      });
+      new CfnOutput(this, 'OamSinkArn', { value: props.auditOamSinkArn });
+    }
+
+    // ── Observability: per-agent CloudWatch dashboard ─────────────────────────
+    // Bedrock invocations, token counts (cost driver), guardrail interventions,
+    // invocation latency p50/p99, and coarse per-tenant month-to-date spend.
+    // Inlined (no @agenticai/observability in a cloned repo).
+    {
+      const inferenceProfileName = prefix; // agenticai-<env>-<tenant>-<agentId>
+      const bedrockDim = { InferenceProfileId: inferenceProfileName };
+      const dashboard = new cw.Dashboard(this, 'Dashboard', {
+        dashboardName: prefix,
+        defaultInterval: Duration.hours(6),
+      });
+      dashboard.addWidgets(
+        new cw.TextWidget({
+          markdown: `# Agentic AI — ${props.envName}/${props.tenantId}/${props.agentId}\nInference profile: **${inferenceProfileName}**.`,
+          width: 24,
+          height: 2,
+        }),
+      );
+      dashboard.addWidgets(
+        new cw.GraphWidget({
+          title: 'Bedrock Invocations',
+          left: [new cw.Metric({ namespace: 'AWS/Bedrock', metricName: 'Invocations', dimensionsMap: bedrockDim, statistic: 'Sum' })],
+          width: 12,
+        }),
+        new cw.GraphWidget({
+          title: 'Input / Output Tokens',
+          left: [
+            new cw.Metric({ namespace: 'AWS/Bedrock', metricName: 'InputTokenCount', dimensionsMap: bedrockDim, statistic: 'Sum' }),
+            new cw.Metric({ namespace: 'AWS/Bedrock', metricName: 'OutputTokenCount', dimensionsMap: bedrockDim, statistic: 'Sum' }),
+          ],
+          width: 12,
+        }),
+        new cw.GraphWidget({
+          title: 'Guardrail Interventions',
+          left: [new cw.Metric({ namespace: 'AWS/Bedrock', metricName: 'GuardrailInvocations', dimensionsMap: bedrockDim, statistic: 'Sum' })],
+          width: 12,
+        }),
+        new cw.GraphWidget({
+          title: 'Invocation Latency (p50 / p99)',
+          left: [
+            new cw.Metric({ namespace: 'AWS/Bedrock', metricName: 'InvocationLatency', dimensionsMap: bedrockDim, statistic: 'p50' }),
+            new cw.Metric({ namespace: 'AWS/Bedrock', metricName: 'InvocationLatency', dimensionsMap: bedrockDim, statistic: 'p99' }),
+          ],
+          width: 12,
+        }),
+      );
+      dashboard.addWidgets(
+        new cw.GraphWidget({
+          title: 'Estimated month-to-date spend (USD) — per-tenant',
+          left: [new cw.Metric({
+            namespace: 'AWS/Billing',
+            metricName: 'EstimatedCharges',
+            dimensionsMap: { Currency: 'USD', ApplicationId: props.tenantId },
+            statistic: 'Maximum',
+            region: 'us-east-1',
+            period: Duration.hours(6),
+          })],
+          width: 12,
+        }),
+      );
+    }
     new CfnOutput(this, 'LogGroupName', { value: logGroup.logGroupName });
   }
 }
