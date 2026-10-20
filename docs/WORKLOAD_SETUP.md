@@ -120,6 +120,7 @@ Open the `cdk.context.json` that came with the blueprint and replace the `FILL_I
   "agenticai/deployWorkloadApp":    true,
 
   "agenticai/inferenceM2mSecretArn": "<from platform team>",
+  "agenticai/inferenceM2mKmsKeyArn": "<from platform team — the CMK ARN that encrypts the M2M secret>",
   "agenticai/inferenceGatewayUrl":   "<from platform team>",
   "agenticai/inferenceModelId":      "<from platform team>"
 }
@@ -339,6 +340,18 @@ if (props.yourAgentImageUri) {
       actions: ["secretsmanager:GetSecretValue"],
       resources: [props.inferenceM2mSecretArn],
     }));
+    // The secret is CMK-encrypted in the publisher account, so decrypt also
+    // needs kms:Decrypt on THIS role. The publisher key policy already trusts
+    // your workload account (granted by the inference-gateway construct); this
+    // is the matching identity-side half. Omitting it => "Access to KMS is not
+    // allowed" on first inference.
+    if (props.inferenceM2mKmsKeyArn) {
+      this.app.runtime.executionRole.addToPolicy(new PolicyStatement({
+        effect: Effect.ALLOW,
+        actions: ["kms:Decrypt"],
+        resources: [props.inferenceM2mKmsKeyArn],
+      }));
+    }
   }
 
   new CfnOutput(this, "YourAgentRuntimeId", {
@@ -463,4 +476,5 @@ Give the platform team the new agent's API Gateway endpoint so they can add its 
 | Gateway returns 429 | Model ID uses CDK versioned format | Use short IDs like `anthropic.claude-haiku-4-5` |
 | ECR push rejected | Tag already exists (immutable repo) | Use a new tag: `v1` → `v2` |
 | Secrets Manager access denied at runtime | Execution role missing `secretsmanager:GetSecretValue` | Add the IAM grant in `workload-app-stack.ts` for each runtime |
+| `Access to KMS is not allowed` reading the M2M secret | Execution role missing `kms:Decrypt` on the publisher CMK (the secret is CMK-encrypted; account-root trust on the key policy alone is not enough) | Set `agenticai/inferenceM2mKmsKeyArn` in `cdk.context.json` — the stack then grants `kms:Decrypt` on that key to the runtime role |
 | Pipeline does not trigger after merge | CI job not yet added, or S3 bucket name wrong | Verify `.gitlab-ci.yml` has the upload job and the bucket name matches what the platform team gave you |

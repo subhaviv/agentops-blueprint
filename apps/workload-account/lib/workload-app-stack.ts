@@ -43,6 +43,15 @@ export interface WorkloadAppStackProps extends StackProps {
 
   /** Inference gateway values from platform team. */
   readonly inferenceM2mSecretArn?: string;
+  /**
+   * CMK (publisher account) that encrypts the M2M secret. Cross-account
+   * GetSecretValue on a CMK-encrypted secret needs kms:Decrypt on BOTH sides:
+   * this identity-policy grant (the consumer runtime role) AND the key policy
+   * in the publisher account. The platform inference-gateway construct already
+   * grants each workload account on the key policy automatically — so the only
+   * thing a workload must supply is THIS identity-side grant.
+   */
+  readonly inferenceM2mKmsKeyArn?: string;
   readonly inferenceGatewayUrl?: string;
   readonly inferenceModelId?: string;
 
@@ -208,6 +217,19 @@ export class WorkloadAppStack extends Stack {
         actions: ['secretsmanager:GetSecretValue'],
         resources: [props.inferenceM2mSecretArn],
       }));
+
+      // The M2M secret is CMK-encrypted in the PUBLISHER account, so a cross-account
+      // GetSecretValue also needs kms:Decrypt on this role's OWN identity policy.
+      // Account-root trust on the publisher key policy (granted automatically by the
+      // inference-gateway construct) is necessary but NOT sufficient — the consumer
+      // role must itself be allowed kms:Decrypt. Without this, every fresh workload
+      // account fails with "Access to KMS is not allowed" on first inference.
+      if (props.inferenceM2mKmsKeyArn) {
+        this.executionRole.addToPolicy(new iam.PolicyStatement({
+          actions: ['kms:Decrypt'],
+          resources: [props.inferenceM2mKmsKeyArn],
+        }));
+      }
     }
 
     // ── CloudWatch log group for the runtime ─────────────────────────────────

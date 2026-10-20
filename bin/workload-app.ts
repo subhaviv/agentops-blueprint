@@ -82,6 +82,7 @@ function addStacks(scope: Construct, cfg: EnvConfig): void {
       externalUserPoolClientId: str("agenticai/externalUserPoolClientId"),
       externalUserPoolRegion:   str("agenticai/externalUserPoolRegion"),
       inferenceM2mSecretArn:    str("agenticai/inferenceM2mSecretArn"),
+      inferenceM2mKmsKeyArn:    str("agenticai/inferenceM2mKmsKeyArn"),
       inferenceGatewayUrl:      str("agenticai/inferenceGatewayUrl"),
       inferenceModelId:         str("agenticai/inferenceModelId"),
       notificationEmail:        str("agenticai/notificationEmail"),

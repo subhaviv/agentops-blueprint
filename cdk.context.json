@@ -10,6 +10,7 @@
   "agenticai/deployWorkloadApp": true,
 
   "agenticai/inferenceM2mSecretArn": "FILL_IN_FROM_PLATFORM_TEAM",
+  "agenticai/inferenceM2mKmsKeyArn": "FILL_IN_FROM_PLATFORM_TEAM",
   "agenticai/inferenceGatewayUrl":   "FILL_IN_FROM_PLATFORM_TEAM",
   "agenticai/inferenceModelId":      "FILL_IN_FROM_PLATFORM_TEAM",
 
