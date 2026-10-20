@@ -66,6 +66,24 @@ export class WorkloadAppStack extends Stack {
     super(scope, id, props);
 
     const prefix = `agenticai-${props.envName}-${props.tenantId}-${props.agentId}`;
+    // AgentCore agentRuntimeName must match [a-zA-Z][a-zA-Z0-9_]{0,47} (letters/digits/
+    // underscores, max 48). Single source of truth — used by the runtime trust ARN and
+    // the CreateAgentRuntime custom resource, so they can never drift. Keep it short and
+    // readable without lossy tricks: drop the constant `agenticai_` prefix, drop the
+    // `_runtime` suffix (the ARN already says runtime/...), abbreviate the env.
+    const envShort = props.envName === 'nonprod' ? 'np'
+      : props.envName === 'prod' ? 'pr'
+      : props.envName;
+    const runtimeName = `${envShort}_${props.tenantId}_${props.agentId}`
+      .replace(/[^a-zA-Z0-9_]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    if (!/^[a-zA-Z][a-zA-Z0-9_]{0,47}$/.test(runtimeName)) {
+      throw new Error(
+        `AgentCore runtimeName '${runtimeName}' (${runtimeName.length} chars) violates ` +
+        `[a-zA-Z][a-zA-Z0-9_]{0,47} (max 48). Shorten tenantId/agentId/env for this agent.`,
+      );
+    }
 
     // ── Cognito User Pool (or import external) ────────────────────────────────
     if (props.externalUserPoolId) {
@@ -97,19 +115,92 @@ export class WorkloadAppStack extends Stack {
     });
 
     // ── AgentCore Runtime execution role ──────────────────────────────────────
+    // Trust the AgentCore Runtime service (NOT plain bedrock.amazonaws.com) with
+    // source-account + this agent's runtime-ARN family conditions, else
+    // CreateAgentRuntime fails role validation.
     this.executionRole = new iam.Role(this, 'RuntimeExecutionRole', {
       roleName: `${prefix}-runtime-exec`,
-      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
+      assumedBy: new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com', {
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': this.account },
+          ArnLike: {
+            'aws:SourceArn': `arn:aws:bedrock-agentcore:${this.region}:${this.account}:runtime/${runtimeName}-*`,
+          },
+        },
+      }),
       description: `Execution role for ${prefix} AgentCore runtime`,
     });
 
+    // Governance: the runtime role must NEVER call Bedrock models directly — all
+    // inference flows through the governed MCP gateway. Explicit DENY.
+    this.executionRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.DENY,
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: ['*'],
+    }));
+
+    // ECR image pull (AgentCore validates+pulls the image as this role).
+    // GetAuthorizationToken is registry-wide (no repo ARN); layer reads are scoped to
+    // the agent's own ECR repo (named after prefix), the repo in agentImageUri.
+    this.executionRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['ecr:GetAuthorizationToken'],
+      resources: ['*'],
+    }));
     this.executionRole.addToPolicy(new iam.PolicyStatement({
       actions: [
-        'bedrock:InvokeModel',
-        'bedrock:InvokeModelWithResponseStream',
-        'bedrock:ApplyGuardrail',
+        'ecr:BatchCheckLayerAvailability',
+        'ecr:BatchGetImage',
+        'ecr:GetDownloadUrlForLayer',
+      ],
+      resources: [`arn:aws:ecr:${this.region}:${this.account}:repository/${prefix}`],
+    }));
+
+    // Runtime CloudWatch Logs (documented AgentCore runtime log-group family).
+    this.executionRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'logs:CreateLogGroup',
+        'logs:CreateLogStream',
+        'logs:PutLogEvents',
+        'logs:DescribeLogStreams',
+        'logs:DescribeLogGroups',
+        'logs:PutResourcePolicy',
+      ],
+      resources: [
+        `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*`,
+        `arn:aws:logs:${this.region}:${this.account}:log-group:/agenticai/${props.envName}/${props.tenantId}/${props.agentId}:*`,
+        `arn:aws:logs:${this.region}:${this.account}:log-group:*`,
+      ],
+    }));
+
+    // X-Ray tracing (for ADOT instrumentation).
+    this.executionRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'xray:PutTraceSegments',
+        'xray:PutTelemetryRecords',
+        'xray:GetSamplingRules',
+        'xray:GetSamplingTargets',
       ],
       resources: ['*'],
+    }));
+
+    // CloudWatch runtime metrics (scoped to the bedrock-agentcore namespace).
+    this.executionRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+      conditions: { StringEquals: { 'cloudwatch:namespace': 'bedrock-agentcore' } },
+    }));
+
+    // Workload access tokens — the running agent issues these at runtime.
+    this.executionRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'bedrock-agentcore:GetWorkloadAccessToken',
+        'bedrock-agentcore:GetWorkloadAccessTokenForJWT',
+        'bedrock-agentcore:GetWorkloadAccessTokenForUserId',
+      ],
+      resources: [
+        `arn:aws:bedrock-agentcore:${this.region}:${this.account}:workload-identity-directory/default`,
+        `arn:aws:bedrock-agentcore:${this.region}:${this.account}:workload-identity-directory/default/workload-identity/*`,
+      ],
     }));
 
     if (props.inferenceM2mSecretArn) {
@@ -135,18 +226,17 @@ export class WorkloadAppStack extends Stack {
         ],
       });
       runtimeCrRole.addToPolicy(new iam.PolicyStatement({
-        actions: [
-          'bedrock-agentcore:CreateAgentRuntime',
-          'bedrock-agentcore:UpdateAgentRuntime',
-          'bedrock-agentcore:DeleteAgentRuntime',
-          'bedrock-agentcore:GetAgentRuntime',
-          'bedrock-agentcore:CreateAgentRuntimeEndpoint',
-          'bedrock-agentcore:UpdateAgentRuntimeEndpoint',
-          'bedrock-agentcore:DeleteAgentRuntimeEndpoint',
-          'bedrock-agentcore:GetAgentRuntimeEndpoint',
-          'iam:PassRole',
-        ],
+        // CreateAgentRuntime transitively creates supporting resources (workload
+        // identity, endpoint, instances). Grant the full bedrock-agentcore control
+        // surface — mirrors AWS's BedrockAgentCoreFullAccess for a creator principal.
+        // This is a stack-created, single-purpose custom-resource Lambda.
+        actions: ['bedrock-agentcore:*'],
         resources: ['*'],
+      }));
+      runtimeCrRole.addToPolicy(new iam.PolicyStatement({
+        actions: ['iam:PassRole'],
+        resources: [this.executionRole.roleArn],
+        conditions: { StringEquals: { 'iam:PassedToService': 'bedrock-agentcore.amazonaws.com' } },
       }));
 
       const runtimeCrProvider = new cr.Provider(this, 'RuntimeCrProvider', {
@@ -182,7 +272,7 @@ exports.handler = async (event) => {
       const runtime = new CustomResource(this, 'AgentRuntime', {
         serviceToken: runtimeCrProvider.serviceToken,
         properties: {
-          runtimeName: `${prefix}-runtime`,
+          runtimeName,
           description: `${props.tenantId} ${props.agentId} agent runtime`,
           imageUri: props.agentImageUri,
           roleArn: this.executionRole.roleArn,
